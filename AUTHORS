@@ -1,1 +1,6 @@
+Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz> is responsible
+for hacking ser2syslog out of ser2net.
+
+Here's the original AUTHORS note for ser2net-2.7:
+
 Corey Minyard <minyard@acm.org> - Original (and still only) author.
