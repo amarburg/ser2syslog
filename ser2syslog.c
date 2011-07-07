@@ -1,5 +1,9 @@
 /*
- *  ser2net - A program for allowing telnet connection to serial ports
+ *  ser2syslog - A program for forwarding serial data to syslog. 
+ *  (C) 2011 Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz>
+ *  Based very heavily on:
+ *
+ *  ser2syslog - A program for allowing telnet connection to serial ports
  *  Copyright (C) 2001  Corey Minyard <minyard@acm.org>
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -17,7 +21,7 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-/* This is the entry point for the ser2net program.  It reads
+/* This is the entry point for the ser2syslog program.  It reads
    parameters, initializes everything, then starts the select loop. */
 
 /* TODO
@@ -39,21 +43,17 @@
 #include "selector.h"
 #include "dataxfer.h"
 
-static char *config_file = "/etc/ser2net.conf";
+static char *config_file = "/etc/ser2syslog.conf";
 static char *config_port = NULL;
 static char *pid_file = NULL;
 static int detach = 1;
 static int debug = 0;
-#ifdef USE_UUCP_LOCKING
-int uucp_locking_enabled = 1;
-#endif
-int cisco_ios_baud_rates = 0;
 
-selector_t *ser2net_sel;
+selector_t *ser2syslog_sel;
 
 static char *help_string =
 "%s: Valid parameters are:\n"
-"  -c <config file> - use a config file besides /etc/ser2net.conf\n"
+"  -c <config file> - use a config file besides /etc/ser2syslog.conf\n"
 "  -C <config line> - Handle a single configuration line.  This may be\n"
 "     specified multiple times for multiple lines.  This is just like a\n"
 "     line in the config file.  This disables the default config file,\n"
@@ -63,10 +63,6 @@ static char *help_string =
 "  -P <file> - set location of pid file\n"
 "  -n - Don't detach from the controlling terminal\n"
 "  -d - Don't detach and send debug I/O to standard output\n"
-#ifdef USE_UUCP_LOCKING
-"  -u - Disable UUCP locking\n"
-#endif
-"  -b - Do CISCO IOS baud-rate negotiation, instead of RFC2217\n"
 "  -v - print the program's version and exit\n";
 
 void
@@ -108,10 +104,10 @@ main(int argc, char *argv[])
     int i;
     int err;
 
-    err = sel_alloc_selector(&ser2net_sel);
+    err = sel_alloc_selector(&ser2syslog_sel);
     if (err) {
 	fprintf(stderr,
-		"Could not initialize ser2net selector: '%s'\n",
+		"Could not initialize ser2syslog selector: '%s'\n",
 		strerror(err));
 	return -1;
     }
@@ -130,10 +126,6 @@ main(int argc, char *argv[])
 	case 'd':
 	    detach = 0;
 	    debug = 1;
-	    break;
-
-	case 'b':
-	    cisco_ios_baud_rates = 1;
 	    break;
 
 	case 'C':
@@ -176,12 +168,6 @@ main(int argc, char *argv[])
 	    pid_file = argv[i];
 	    break;
 
-#ifdef USE_UUCP_LOCKING
-	case 'u':
-	    uucp_locking_enabled = 0;
-	    break;
-#endif
-
 	case 'v':
 	    printf("%s version %s\n", argv[0], VERSION);
 	    exit(0);
@@ -201,7 +187,7 @@ main(int argc, char *argv[])
     }
 
     if (debug && !detach)
-	openlog("ser2net", LOG_PID | LOG_CONS | LOG_PERROR, LOG_DAEMON);
+	openlog("ser2syslog", LOG_PID | LOG_CONS | LOG_PERROR, LOG_DAEMON);
 
     if (config_file) {
 	if (readconfig(config_file) == -1) {
@@ -213,8 +199,8 @@ main(int argc, char *argv[])
 	int pid;
 
 	/* Detach from the calling terminal. */
-	openlog("ser2net", LOG_PID | LOG_CONS, LOG_DAEMON);
-	syslog(LOG_NOTICE, "ser2net startup");
+	openlog("ser2syslog", LOG_PID | LOG_CONS, LOG_DAEMON);
+	syslog(LOG_NOTICE, "ser2syslog startup");
 	if ((pid = fork()) > 0) {
 	    exit(0);
 	} else if (pid < 0) {
@@ -247,7 +233,7 @@ main(int argc, char *argv[])
 
     set_sighup_handler(reread_config);
 
-    sel_select_loop(ser2net_sel);
+    sel_select_loop(ser2syslog_sel);
 
     return 0;
 }

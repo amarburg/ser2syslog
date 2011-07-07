@@ -1,4 +1,12 @@
 /*
+ *  ser2syslog - A program for forwarding serial data to syslog
+ *  Copyright (C) 2011 Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz>
+ *
+ *  Relative to ser2net, I've gutted the banner functionality and
+ *  rearranged the configuration file a bit.
+ *
+ * Based heavily on:
+ *
  *  ser2net - A program for allowing telnet connection to serial ports
  *  Copyright (C) 2001  Corey Minyard <minyard@acm.org>
  *
@@ -31,151 +39,8 @@
 
 #define MAX_LINE_SIZE 256	/* Maximum line length in the config file. */
 
-#define MAX_BANNER_SIZE 256
-
 static int config_num = 0;
-
-static int banner_continued = 0;
-static char *working_banner_name = NULL;
-static char working_banner[MAX_BANNER_SIZE+1];
-static int working_banner_len = 0;
-static int banner_truncated = 0;
-
 static int lineno = 0;
-
-struct banner_s
-{
-    char *name;
-    char *str;
-    struct banner_s *next;
-};
-
-/* All the banners in the system. */
-struct banner_s *banners = NULL;
-
-static void
-handle_new_banner(void)
-{
-    struct banner_s *new_banner;
-
-    working_banner[working_banner_len] = '\0';
-    
-    if (banner_truncated)
-	syslog(LOG_ERR, "banner ending on line %d was truncated, max length"
-	       " is %d characters", lineno, MAX_BANNER_SIZE);
-
-    if (!working_banner_name) {
-	syslog(LOG_ERR, "Out of memory handling banner on %d", lineno);
-	goto out;
-    }
-
-    new_banner = malloc(sizeof(*new_banner));
-    if (!new_banner) {
-	syslog(LOG_ERR, "Out of memory handling banner on %d", lineno);
-	free(working_banner_name);
-	goto out;
-    }
-
-    new_banner->name = working_banner_name;
-    new_banner->str = strdup(working_banner);
-    if (!new_banner->str) {
-	syslog(LOG_ERR, "Out of memory handling banner on %d", lineno);
-	free(new_banner->name);
-	free(new_banner);
-	return;
-    }
-
-    new_banner->next = banners;
-    banners = new_banner;
-
- out:
-    working_banner_name = NULL;
-    working_banner_len = 0;
-    banner_truncated = 0;
-    banner_continued = 0;
-}
-
-/* Parse the incoming banner, it may be on multiple lines. */
-static void
-handle_banner(char *name, char *line)
-{
-    int line_len = strlen(line);
-    int real_line_len = line_len;
-
-    /* handle a NULL return later. */
-    working_banner_name = strdup(name);
-
-    if (line_len >= MAX_BANNER_SIZE) {
-	banner_truncated = 1;
-	line_len = MAX_BANNER_SIZE;
-    }
-    memcpy(working_banner, line, line_len);
-    working_banner_len = line_len;
-
-    if ((real_line_len > 0) && (line[real_line_len-1] == '\\')) {
-	/* remove the '\' */
-	working_banner_len--;
-	banner_continued = 1;
-    } else {
-	handle_new_banner();
-    }
-
-}
-
-static void
-handle_continued_banner(char *line)
-{
-    int line_len = strlen(line);
-    int real_line_len = line_len;
-
-    if ((line_len + working_banner_len) > MAX_BANNER_SIZE) {
-	banner_truncated = 1;
-	line_len = MAX_BANNER_SIZE - working_banner_len;
-    }
-    memcpy(working_banner+working_banner_len, line, line_len);
-    working_banner_len += line_len;
-
-    if ((real_line_len == 0) || (line[real_line_len-1] != '\\')) {
-	handle_new_banner();
-    } else {
-	/* remove the '\' */
-	working_banner_len--;
-    }
-}
-
-char *
-find_banner(char *name)
-{
-    struct banner_s *banner = banners;
-
-    while (banner) {
-	if (strcmp(name, banner->name) == 0)
-	    return banner->str;
-	banner = banner->next;
-    }
-    return NULL;
-}
-
-static void
-free_banners(void)
-{
-    struct banner_s *banner;
-
-    if (working_banner_name)
-	free(working_banner_name);
-    working_banner_name = NULL;
-    working_banner_len = 0;
-    banner_truncated = 0;
-    banner_continued = 0;
-
-    while (banners) {
-	banner = banners;
-	banners = banners->next;
-	free(banner->name);
-	free(banner->str);
-	free(banner);
-    }
-}
 
 struct tracefile_s
 {
@@ -249,43 +114,24 @@ free_tracefiles(void)
 void
 handle_config_line(char *inbuf)
 {
-    char *portnum, *state, *timeout, *devname, *devcfg;
+    char *devname, *devcfg, *facility, *severity;
     char *strtok_data = NULL;
     char *errstr;
 
     lineno++;
-
-    if (banner_continued) {
-	char *str = strtok_r(inbuf, "\n", &strtok_data);
-	if (!str)
-	    str = "";
-	handle_continued_banner(str);
-	return;
-    }
 
     if (inbuf[0] == '#') {
 	/* Ignore comments. */
 	return;
     }
 
-    portnum = strtok_r(inbuf, ":", &strtok_data);
-    if (portnum == NULL) {
+    devname = strtok_r(inbuf, ":", &strtok_data);
+    if (devname == NULL) {
 	/* An empty line is ok. */
 	return;
     }
 
-    if (strcmp(portnum, "BANNER") == 0) {
-	char *name = strtok_r(NULL, ":", &strtok_data);
-	char *str = strtok_r(NULL, "\n", &strtok_data);
-	if (name == NULL) {
-	    syslog(LOG_ERR, "No banner name given on line %d", lineno);
-	    return;
-	}
-	handle_banner(name, str);
-	return;
-    }
-
-    if (strcmp(portnum, "TRACEFILE") == 0) {
+    if (strcmp(devname, "TRACEFILE") == 0) {
 	char *name = strtok_r(NULL, ":", &strtok_data);
 	char *str = strtok_r(NULL, "\n", &strtok_data);
 	if (name == NULL) {
@@ -300,31 +146,25 @@ handle_config_line(char *inbuf)
 	return;
     }
 
-    state = strtok_r(NULL, ":", &strtok_data);
-    if (state == NULL) {
-	syslog(LOG_ERR, "No state given on line %d", lineno);
-	return;
-    }
-
-    timeout = strtok_r(NULL, ":", &strtok_data);
-    if (timeout == NULL) {
-	syslog(LOG_ERR, "No timeout given on line %d", lineno);
-	return;
-    }
-
-    devname = strtok_r(NULL, ":", &strtok_data);
-    if (devname == NULL) {
-	syslog(LOG_ERR, "No device name given on line %d", lineno);
-	return;
-    }
-
     devcfg = strtok_r(NULL, ":", &strtok_data);
     if (devcfg == NULL) {
 	/* An empty device config is ok. */
 	devcfg = "";
     }
 
-    errstr = portconfig(portnum, state, timeout, devname, devcfg,
+    facility = strtok_r(NULL, ":", &strtok_data);
+    if (facility == NULL) {
+	syslog(LOG_ERR, "No facility given on line %d", lineno);
+	return;
+    }
+
+    severity = strtok_r(NULL, ":", &strtok_data);
+    if (severity == NULL) {
+	syslog(LOG_ERR, "No severity given on line %d", lineno);
+	return;
+    }
+
+    errstr = portconfig(devname, devcfg, facility, severity,
 			config_num);
     if (errstr != NULL) {
 	syslog(LOG_ERR, "Error on line %d, %s", lineno, errstr);

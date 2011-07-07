@@ -1,4 +1,7 @@
 /*
+ *  ser2syslog - A program for forwarding serial communication to syslog.
+ *  Copyright (C) 2011 Aaron Marburg <aaron.marburg@pg.cantebury.ac.nz>
+ *
  *  ser2net - A program for allowing telnet connection to serial ports
  *  Copyright (C) 2001  Corey Minyard <minyard@acm.org>
  *
@@ -51,16 +54,8 @@ extern selector_t *ser2net_sel;
 /** BASED ON sshd.c FROM openssh.com */
 #ifdef HAVE_TCPD_H
 #include <tcpd.h>
-static char *progname = "ser2net";
+static char *progname = "ser2syslog";
 #endif /* HAVE_TCPD_H */
-
-#ifdef USE_UUCP_LOCKING
-static char *uucp_lck_dir = "/var/lock";
-#ifndef HAVE_TCPD_H
-static char *progname = "ser2net";
-#endif
-#endif /* USE_UUCP_LOCKING */
-
 
 /* States for the tcp_to_dev_state and dev_to_tcp_state. */
 #define PORT_UNCONNECTED		0 /* The TCP port is not connected
@@ -97,37 +92,6 @@ typedef struct port_info
 					   enabled and it will do
 					   telnet negotiations. */
 
-    int            timeout;		/* The number of seconds to
-					   wait without any I/O before
-					   we shut the port down. */
-
-    int            timeout_left;	/* The amount of time left (in
-					   seconds) before the timeout
-					   goes off. */
-
-    sel_timer_t *timer;			/* Used to timeout when the no
-					   I/O has been seen for a
-					   certain period of time. */
-
-
-    /* Information about the TCP port. */
-    char               *portname;       /* The name given for the port. */
-    struct sockaddr_in tcpport;		/* The TCP port to listen on
-					   for connections to this
-					   terminal device. */
-    int            acceptfd;		/* The file descriptor used to
-					   accept connections on the
-					   TCP port. */
-    int            tcpfd;		/* When connected, the file
-                                           descriptor for the TCP
-                                           port used for I/O. */
-    struct sockaddr_in remote;		/* The socket address of who
-					   is connected to this port. */
-    unsigned int tcp_bytes_received;    /* Number of bytes read from the
-					   TCP port. */
-    unsigned int tcp_bytes_sent;        /* Number of bytes written to the
-					   TCP port. */
-
     /* Information about the terminal device. */
     char           *devname;		/* The full path to the device */
     int            devfd;		/* The file descriptor for the
@@ -138,40 +102,10 @@ typedef struct port_info
     unsigned int dev_bytes_sent;        /* Number of bytes written to the
 					   device. */
 
+    /* Information about the syslog side of things */
+    int           facility;
+    int           severity;
 
-    /* Information use when transferring information from the TCP port
-       to the terminal device. */
-    int            tcp_to_dev_state;		/* State of transferring
-						   data from the TCP port
-                                                   to the device. */
-    unsigned char  tcp_to_dev_buf[PORT_BUFSIZE]; /* Buffer used for
-                                                    TCP to device
-                                                    transfers. */
-    int            tcp_to_dev_buf_start;	/* The first byte in
-						   the buffer that is
-						   ready to send. */
-    int            tcp_to_dev_buf_count;	/* The number of bytes
-                                                   in the buffer to
-                                                   send. */
-    struct controller_info *tcp_monitor; /* If non-null, send any input
-					    received from the TCP port
-					    to this controller port. */
-
-
-    /* Information use when transferring information from the terminal
-       device to the TCP port. */
-    int            dev_to_tcp_state;		/* State of transferring
-						   data from the device to
-                                                   the TCP port. */
-    unsigned char  dev_to_tcp_buf[PORT_BUFSIZE]; /* Buffer used for
-                                                    device to TCP
-                                                    transfers. */
-    int            dev_to_tcp_buf_start;	/* The first byte in
-						   the buffer that is
-						   ready to send. */
-    int            dev_to_tcp_buf_count;	/* The number of bytes
-                                                   in the buffer to
-                                                   send. */
     struct controller_info *dev_monitor; /* If non-null, send any input
 					    received from the device
 					    to this controller port. */
@@ -237,118 +171,6 @@ static struct telnet_cmd telnet_cmds[] =
       com_port_handler, com_port_will },
     { 255 }
 };
-
-
-#ifdef USE_UUCP_LOCKING
-static int
-uucp_fname_lock_size(char *devname)
-{
-    char *ptr;
-
-    (ptr = strrchr(devname, '/'));
-    if (ptr == NULL) {
-	ptr = devname;
-    } else {
-	ptr = ptr + 1;
-    }
-
-    return 7 + strlen(uucp_lck_dir) + strlen(ptr);
-}
-
-static void
-uucp_fname_lock(char *buf, char *devname)
-{
-    char *ptr;
-
-    (ptr = strrchr(devname, '/'));
-    if (ptr == NULL) {
-	ptr = devname;
-    } else {
-	ptr = ptr + 1;
-    }
-    sprintf(buf, "%s/LCK..%s", uucp_lck_dir, ptr);
-}
-
-static void
-uucp_rm_lock(char *devname)
-{
-    char *lck_file;
-
-    if (!uucp_locking_enabled) return;
-
-    lck_file = malloc(uucp_fname_lock_size(devname));
-    if (lck_file == NULL) {
-	return;
-    }
-    uucp_fname_lock(lck_file, devname);
-    unlink(lck_file);
-    free(lck_file);
-}
-
-/* return 0=OK, -1=error, 1=locked by other proces */
-static int
-uucp_mk_lock(char *devname)
-{
-    struct stat stt;
-    int pid=-1;
-
-    if (!uucp_locking_enabled) return 0;
-
-    if( stat(uucp_lck_dir, &stt) == 0 ) { /* is lock file directory present? */
-	char *lck_file, buf[64];
-	int fd;
-
-	lck_file = malloc(uucp_fname_lock_size(devname));
-	if (lck_file == NULL) {
-	    return -1;
-	}
-	uucp_fname_lock(lck_file, devname);
-
-	pid = 0;
-	if( (fd = open(lck_file, O_RDONLY)) >= 0 ) {
-	    int n;
-
-    	    n = read(fd, buf, sizeof(buf));
-	    close(fd);
-	    if( n == 4 ) 		/* Kermit-style lockfile. */
-		pid = *(int *)buf;
-	    else if( n > 0 ) {		/* Ascii lockfile. */
-		buf[n] = 0;
-		sscanf(buf, "%d", &pid);
-	    }
-
-	    if( pid > 0 && kill((pid_t)pid, 0) < 0 && errno == ESRCH ) {
-		/* death lockfile - remove it */
-		unlink(lck_file);
-		sleep(1);
-		pid = 0;
-	    } else
-		pid = 1;
-
-	}
-
-	if( pid == 0 ) {
-	    int mask;
-
-	    mask = umask(022);
-	    fd = open(lck_file, O_WRONLY | O_CREAT | O_EXCL, 0666);
-	    umask(mask);
-	    if( fd >= 0 ) {
-		snprintf( buf, sizeof(buf), "%10ld\t%s\n",
-					     (long)getpid(), progname );
-		write( fd, buf, strlen(buf) );
-		close(fd);
-	    } else {
-		pid = 1;
-	    }
-	}
-
-	free(lck_file);
-    }
-
-    return pid;
-}
-#endif /* USE_UUCP_LOCKING */
 
 static void
 init_port_data(port_info_t *port)
@@ -859,109 +681,6 @@ from_hex_digit(char c)
     if ((c >= 'a') && (c <= 'f'))
 	return c = 'a' + 10;
     return 0;
-}
-
-static void
-display_banner(port_info_t *port)
-{
-    char val;
-    char *s;
-    char *t;
-
-    if (!port->dinfo.banner)
-	return;
-
-    s = port->dinfo.banner;
-    while (*s) {
-	if (*s == '\\') {
-	    s++;
-	    if (!*s)
-		return;
-	    switch (*s) {
-	    /* Standard "C" characters. */
-	    case 'a': add_port_tcp_char(port, 7); break;
-	    case 'b': add_port_tcp_char(port, 8); break;
-	    case 'f': add_port_tcp_char(port, 12); break;
-	    case 'n': add_port_tcp_char(port, 10); break;
-	    case 'r': add_port_tcp_char(port, 13); break;
-	    case 't': add_port_tcp_char(port, 9); break;
-	    case 'v': add_port_tcp_char(port, 11); break;
-	    case '\\': add_port_tcp_char(port, '\\'); break;
-	    case '?': add_port_tcp_char(port, '?'); break;
-	    case '\'': add_port_tcp_char(port, '\''); break;
-	    case '"': add_port_tcp_char(port, '"'); break;
-
-	    case 'd':
-		/* ser2net device name. */
-		for (t=port->devname; *t; t++)
-		    add_port_tcp_char(port, *t);
-		break;
-
-	    case 'p':
-		/* ser2net TCP port. */
-		for (t=port->portname; *t; t++)
-		    add_port_tcp_char(port, *t);
-		break;
-
-	    case 's':
-		/* ser2net serial parms. */
-		{
-		    char str[15];
-		    serparm_to_str(str, sizeof(str), &(port->dinfo.termctl));
-		    for (t=str; *t; t++)
-			add_port_tcp_char(port, *t);
-		}
-		break;
-
-	    case '0': case '1': case '2': case '3': case '4': case '5':
-	    case '6': case '7':
-		/* Octal digit */
-		val = (*s) - '0';
-		s++;
-		if (!*s) {
-		    add_port_tcp_char(port, val);
-		    return;
-		}
-		if (!isdigit(*s)) {
-		    continue;
-		}
-		val = (val * 8) + (*s) - '0';
-		s++;
-		if (!*s) {
-		    add_port_tcp_char(port, val);
-		    return;
-		}
-		if (!isdigit(*s)) {
-		    continue;
-		}
-		val = (val * 8) + (*s) - '0';
-		break;
-
-	    case 'x':
-		/* Hex digit */
-		s++;
-		if (!*s)
-		    return;
-		if (!isxdigit(*s))
-		    continue;
-		val = from_hex_digit(*s);
-		s++;
-		if (!*s) {
-		    add_port_tcp_char(port, val);
-		    return;
-		}
-		if (!isdigit(*s))
-		    continue;
-		val = (val * 16) + from_hex_digit(*s);
-		break;
-
-	    default:
-		add_port_tcp_char(port, *s);
-	    }
-	} else
-	    add_port_tcp_char(port, *s);
-	s++;
-    }
 }
 
 enum fn_tr_state {
@@ -1811,11 +1530,10 @@ got_timeout(selector_t  *sel,
 
 /* Create a port based on a set of parameters passed in. */
 char *
-portconfig(char *portnum,
-	   char *state,
-	   char *timeout,
-	   char *devname,
+portconfig( char *devname,
 	   char *devcfg,
+           char *facility,
+           char *severity,
 	   int  config_num)
 {
     port_info_t *new_port, *curr, *prev;
@@ -1826,47 +1544,8 @@ portconfig(char *portnum,
 	return "Could not allocate a port data structure";
     }
 
-    if (sel_alloc_timer(ser2net_sel,
-			got_timeout, new_port,
-			&new_port->timer))
-    {
-	free(new_port);
-	return "Could not allocate timer data";
-    }
-
     /* Errors from here on out must goto errout. */
     init_port_data(new_port);
-
-    new_port->portname = malloc(strlen(portnum)+1);
-    if (new_port->portname == NULL) {
-	rv = "unable to allocate port name";
-	goto errout;
-    }
-    strcpy(new_port->portname, portnum);
-
-    if (scan_tcp_port(portnum, &(new_port->tcpport)) == -1) {
-	rv = "port number was invalid";
-	goto errout;
-    }
-
-    if (strcmp(state, "raw") == 0) {
-	new_port->enabled = PORT_RAW;
-    } else if (strcmp(state, "rawlp") == 0) {
-	new_port->enabled = PORT_RAWLP;
-    } else if (strcmp(state, "telnet") == 0) {
-	new_port->enabled = PORT_TELNET;
-    } else if (strcmp(state, "off") == 0) {
-	new_port->enabled = PORT_DISABLED;
-    } else {
-	rv = "state was invalid";
-	goto errout;
-    }
-
-    new_port->timeout = scan_int(timeout);
-    if (new_port->timeout == -1) {
-	rv = "timeout was invalid";
-	goto errout;
-    }
 
     devinit(&(new_port->dinfo.termctl));
 
@@ -1883,40 +1562,26 @@ portconfig(char *portnum,
     }
     strcpy(new_port->devname, devname);
 
+    new_port->facility = facilityfromstring( facility );
+    if (new_port->facility < 0 ) {
+      rv = "could not figure out facility";
+      goto errout;
+    }
+
+    new_port->severity = severityfromstring( severity );
+    if (new_port->severity < 0 ) {
+      rv = "could not figure out severity";
+      goto errout;
+    }
+
     new_port->config_num = config_num;
 
     /* See if the port already exists, and reconfigure it if so. */
     curr = ports;
     prev = NULL;
     while (curr != NULL) {
-	if (strcmp(curr->portname, new_port->portname) == 0) {
+	if (strcmp(curr->devname, new_port->devname) == 0) {
 	    /* We are reconfiguring this port. */
-	    if (curr->dev_to_tcp_state == PORT_UNCONNECTED) {
-		/* Port is disconnected, just remove it. */
-		int new_state = new_port->enabled;
-
-		new_port->enabled = curr->enabled;
-		new_port->acceptfd = curr->acceptfd;
-		curr->enabled = PORT_DISABLED;
-		curr->acceptfd = -1;
-		sel_set_fd_handlers(ser2net_sel,
-				    new_port->acceptfd,
-				    new_port,
-				    handle_accept_port_read,
-				    NULL,
-				    NULL);
-
-		/* Just replace with the new data. */
-		if (prev == NULL) {
-		    ports = new_port;
-		} else {
-		    prev->next = new_port;
-		}
-		new_port->next = curr->next;
-		free_port(curr);
-
-		change_port_state(new_port, new_state);
-	    } else {
 		/* Mark it to be replaced later. */
 		if (curr->new_config != NULL) {
 		    curr->enabled = PORT_DISABLED;
@@ -1924,7 +1589,7 @@ portconfig(char *portnum,
 		}
 		curr->config_num = config_num;
 		curr->new_config = new_port;
-	    }
+
 	    return rv;
 	} else {
 	    prev = curr;
