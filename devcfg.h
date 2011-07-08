@@ -1,4 +1,8 @@
 /*
+ *  ser2syslog - A program for forwarding serial data to syslog. 
+ *  (C) 2011 Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz>
+ *  Based very heavily on:
+ *
  *  ser2net - A program for allowing telnet connection to serial ports
  *  Copyright (C) 2001  Corey Minyard <minyard@acm.org>
  *
@@ -21,45 +25,22 @@
 #define DEVCFG
 
 #include <termios.h>
-#include "controller.h"
 
 /* Called to initially configure a terminal. */
 void devinit(struct termios *termctl);
 
-typedef struct dev_info {
-    /* The termios information to set for the device. */
-    struct termios termctl;
-
-    /* Allow RFC 2217 mode */
-    int allow_2217;
-
-    /* Disable break-commands */
-    int disablebreak;
-
-    /* Banner to display at startup, or NULL if none. */
-    char *banner;
-
-    /*
-     * File to read/write trace, NULL if none.  If the same, then
-     * trace information is in the same file, only one open is done.
-     */
-    char *trace_read;
-    char *trace_write;
-    char *trace_both;
-} dev_info_t;
-
 /* Called to change the configuration of a device based upon the
    string parameters. */
-int devconfig(char *instr, dev_info_t *info);
+/*int devconfig(char *instr, dev_info_t *info); */
 
 /* Prints the configuration of a device to a controller. */
-void show_devcfg(struct controller_info *cntlr, struct termios *termctl);
+/*void show_devcfg(struct controller_info *cntlr, struct termios *termctl); */
 
 /* Sets the DTR and RTS lines dynamically. */
-int setdevcontrol(char *instr, int fd);
+/*int setdevcontrol(char *instr, int fd); */
 
 /* Show the state of the DTR and RTS lines. */
-void show_devcontrol(struct controller_info *cntlr, int fd);
+/*void show_devcontrol(struct controller_info *cntlr, int fd); */
 
 /* Convert the serial parameters to a string. */
 void serparm_to_str(char *str, int strlen, struct termios *termctl);

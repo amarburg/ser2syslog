@@ -55,9 +55,7 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(man8dir)"
 PROGRAMS = $(sbin_PROGRAMS)
-am_ser2syslog_OBJECTS = controller.$(OBJEXT) dataxfer.$(OBJEXT) \
-	devcfg.$(OBJEXT) readconfig.$(OBJEXT) selector.$(OBJEXT) \
-	ser2syslog.$(OBJEXT) utils.$(OBJEXT) telnet.$(OBJEXT)
+am_ser2syslog_OBJECTS = ser2syslog.$(OBJEXT) devcfg.$(OBJEXT)
 ser2syslog_OBJECTS = $(am_ser2syslog_OBJECTS)
 ser2syslog_LDADD = $(LDADD)
 DEFAULT_INCLUDES = -I.@am__isrc@
@@ -225,12 +223,8 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 AM_CFLAGS = -Wall
-ser2syslog_SOURCES = controller.c dataxfer.c devcfg.c readconfig.c selector.c \
-	ser2syslog.c utils.c telnet.c
-
-noinst_HEADERS = controller.h dataxfer.h devcfg.h readconfig.h selector.h \
-	utils.h telnet.h
-
+ser2syslog_SOURCES = ser2syslog.c devcfg.c
+noinst_HEADERS = 
 man_MANS = ser2syslog.8
 EXTRA_DIST = $(man_MANS) 
 ACLOCAL_AMFLAGS = -I m4
@@ -325,14 +319,8 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/controller.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/dataxfer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/devcfg.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/readconfig.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/selector.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ser2syslog.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/telnet.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/utils.Po@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<

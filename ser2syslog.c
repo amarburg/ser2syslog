@@ -35,206 +35,198 @@
 #include <string.h>
 #include <syslog.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <termios.h>
 #include <unistd.h>
 
-#include "readconfig.h"
-#include "controller.h"
-#include "utils.h"
-#include "selector.h"
-#include "dataxfer.h"
+#include "devcfg.h"
 
-static char *config_file = "/etc/ser2syslog.conf";
-static char *config_port = NULL;
+#define DEFAULT_FACILITY LOG_LOCAL0
+#define DEFAULT_SEVERITY LOG_ERR
+#define DEFAULT_BAUD     B9600
+#define BUF_LEN          256
+
+static char *dev_name = NULL;
+static speed_t baud_rate = DEFAULT_BAUD;
+static int facility = DEFAULT_FACILITY;
+static int severity = DEFAULT_SEVERITY;
+
 static char *pid_file = NULL;
 static int detach = 1;
 static int debug = 0;
 
-selector_t *ser2syslog_sel;
 
 static char *help_string =
 "%s: Valid parameters are:\n"
-"  -c <config file> - use a config file besides /etc/ser2syslog.conf\n"
-"  -C <config line> - Handle a single configuration line.  This may be\n"
-"     specified multiple times for multiple lines.  This is just like a\n"
-"     line in the config file.  This disables the default config file,\n"
-"     you must specify a -c after the last -C to have it read a config\n"
-"     file, too.\n"
-"  -p <controller port> - Start a controller session on the given TCP port\n"
 "  -P <file> - set location of pid file\n"
 "  -n - Don't detach from the controlling terminal\n"
 "  -d - Don't detach and send debug I/O to standard output\n"
 "  -v - print the program's version and exit\n";
 
-void
-reread_config(void)
-{
-    if (config_file) {
-	syslog(LOG_INFO, "Got SIGHUP, re-reading configuration");
-	readconfig(config_file);
-    }
-}
-
-void
+  void
 arg_error(char *name)
 {
-    fprintf(stderr, help_string, name);
-    exit(1);
+  fprintf(stderr, help_string, name);
+  exit(1);
+}
+
+  void
+make_pidfile(char *pidfile)
+{
+  FILE *fpidfile;
+  if (!pidfile)
+    return;
+  fpidfile = fopen(pidfile, "w");
+  if (!fpidfile) {
+    syslog(LOG_WARNING,
+        "Error opening pidfile '%s': %m, pidfile not created",
+        pidfile);
+    return;
+  }
+  fprintf(fpidfile, "%d\n", getpid());
+  fclose(fpidfile);
 }
 
 void
-make_pidfile(char *pidfile)
+show_ser_params( FILE *stream, struct termios *termctl   )
 {
-    FILE *fpidfile;
-    if (!pidfile)
-	return;
-    fpidfile = fopen(pidfile, "w");
-    if (!fpidfile) {
-	syslog(LOG_WARNING,
-	       "Error opening pidfile '%s': %m, pidfile not created",
-	       pidfile);
-	return;
-    }
-    fprintf(fpidfile, "%d\n", getpid());
-    fclose(fpidfile);
+  char buf[80];
+
+  serparm_to_str( buf, 79, termctl );
+  fprintf( stream, "%s\n", buf );
 }
 
-int
+
+  int
 main(int argc, char *argv[])
 {
-    int i;
-    int err;
+  char c;
+  int devfd;
+  int syslog_options, fd_options;
 
-    err = sel_alloc_selector(&ser2syslog_sel);
-    if (err) {
-	fprintf(stderr,
-		"Could not initialize ser2syslog selector: '%s'\n",
-		strerror(err));
-	return -1;
+  char buf[BUF_LEN+2];
+  int buf_ptr = 0;
+
+  char *eol = "\x0D\x0A";
+  char *eol_ptr;
+
+  int bytes_read;
+  int prev_buf_ptr;
+
+  while( c == getopt( argc, argv, "P:ndv" ) ) {
+    switch( c ) {
+      case 'n':
+        detach = 0;
+        break;
+
+      case 'd':
+        detach = 0;
+        debug = 1;
+        break;
+
+      case 'P':
+        pid_file = optarg;
+        break;
+
+      case 'v':
+        printf("%s version %s\n", argv[0], VERSION);
+        exit(0);
+
+      default:
+        fprintf(stderr, "Invalid option: '%c'\n", c);
+        arg_error(argv[0]);
+    }
+  }
+
+
+  //setup_sighup();
+
+  if (detach) {
+    int pid;
+
+    /* Detach from the calling terminal. */
+    if ((pid = fork()) > 0) {
+      exit(0);
+    } else if (pid < 0) {
+      syslog(LOG_ERR, "Error forking first fork");
+      exit(1);
+    } else {
+      /* setsid() is necessary if we really want to demonize */
+      setsid();
+      /* Second fork to really deamonize me. */
+      if ((pid = fork()) > 0) {
+        exit(0);
+      } else if (pid < 0) {
+        syslog(LOG_ERR, "Error forking second fork");
+        exit(1);
+      }
     }
 
-    for (i=1; i<argc; i++) {
-	if ((argv[i][0] != '-') || (strlen(argv[i]) != 2)) {
-	    fprintf(stderr, "Invalid argument: '%s'\n", argv[i]);
-	    arg_error(argv[0]);
-	}
+    /* Close all my standard I/O. */
+    chdir("/");
+    close(0);
+    close(1);
+    close(2);
+  }
 
-	switch (argv[i][1]) {
-	case 'n':
-	    detach = 0;
-	    break;
+  /* write pid file */
+  make_pidfile(pid_file);
 
-	case 'd':
-	    detach = 0;
-	    debug = 1;
-	    break;
+  /* Ignore SIGPIPEs so they don't kill us. */
+  signal(SIGPIPE, SIG_IGN);
 
-	case 'C':
-	    /* Get a config line. */
-	    i++;
-	    if (i == argc) {
-		fprintf(stderr, "No config line specified with -C\n");
-		arg_error(argv[0]);
-	    }
-	    handle_config_line(argv[i]);
-	    config_file = NULL;
-	    break;
+  syslog_options = LOG_NDELAY;
+  if( debug && !detach ) syslog_options |= LOG_PERROR;
+  openlog( dev_name, syslog_options, facility );
 
-	case 'c':
-	    /* Get a config file. */
-	    i++;
-	    if (i == argc) {
-		fprintf(stderr, "No config file specified with -c\n");
-		arg_error(argv[0]);
-	    }
-	    config_file = argv[i];
-	    break;
+  // Open the serial port
+  struct termios termctl;
+  devinit( &termctl );
 
-	case 'p':
-	    /* Get the control port. */
-	    i++;
-	    if (i == argc) {
-		fprintf(stderr, "No control port specified with -p\n");
-		arg_error(argv[0]);
-	    }
-	    config_port = argv[i];
-	    break;
-	
-	case 'P':
-	    i++;
-	    if (i == argc) {
-		fprintf(stderr, "No pid file specified with -P\n");
-		arg_error(argv[0]);
-	    }
-	    pid_file = argv[i];
-	    break;
+  cfsetospeed( &termctl, baud_rate );
+  cfsetispeed( &termctl, baud_rate );
 
-	case 'v':
-	    printf("%s version %s\n", argv[0], VERSION);
-	    exit(0);
+  if( debug ) {
+    show_ser_params( stdout, &termctl );
+  }
 
-	default:
-	    fprintf(stderr, "Invalid option: '%s'\n", argv[i]);
-	    arg_error(argv[0]);
-	}
+  fd_options = O_NONBLOCK | O_NOCTTY | O_RDONLY;
+  devfd = open(  dev_name, fd_options );
+
+  if( devfd == -1 ) {
+    close( devfd );
+    syslog( LOG_ERR, "Could not open device %s", dev_name );
+  }
+
+  tcsetattr( devfd, TCSANOW, &termctl );
+
+  while( bytes_read = read( devfd, &(buf[buf_ptr]), BUF_LEN-buf_ptr ) ) {
+    pre_buf_ptr = buf_ptr;
+    buf_ptr += bytes_read;
+    buf[buf_ptr] = '\0';
+
+    if( buf_ptr => BUF_LEN ) {
+      syslog( severity, "%BUF_LENs", buf );
+      buf_ptr = 0;
     }
 
-    setup_sighup();
-    if (config_port != NULL) {
-	if (controller_init(config_port) == -1) {
-	    fprintf(stderr, "Invalid control port specified with -p\n");
-	    arg_error(argv[0]);
-	}
+    if( pre_buf_ptr > strlen( eol ) ) { pre_buf_ptr -= strlen(eol) };
+    else { pre_buf_ptr = 0; }
+
+    if( eol_ptr = strstr( &(buf[pre_buf_ptr]), eol ) ) {
+      eol_ptr = '\0';
+      eol_ptr += strlen(eol);
+
+      syslog( severity, "%s", buf );
+
+      if( eol_ptr < buf_ptr ) {
+        memcpy( buf, eol_tr, (buf_ptr - eol_ptr) );
+        buf_ptr = 0;
+      }
+
     }
+  }
 
-    if (debug && !detach)
-	openlog("ser2syslog", LOG_PID | LOG_CONS | LOG_PERROR, LOG_DAEMON);
-
-    if (config_file) {
-	if (readconfig(config_file) == -1) {
-	    return 1;
-	}
-    }
-
-    if (detach) {
-	int pid;
-
-	/* Detach from the calling terminal. */
-	openlog("ser2syslog", LOG_PID | LOG_CONS, LOG_DAEMON);
-	syslog(LOG_NOTICE, "ser2syslog startup");
-	if ((pid = fork()) > 0) {
-	    exit(0);
-	} else if (pid < 0) {
-	    syslog(LOG_ERR, "Error forking first fork");
-	    exit(1);
-	} else {
-	    /* setsid() is necessary if we really want to demonize */
-	    setsid();
-	    /* Second fork to really deamonize me. */
-	    if ((pid = fork()) > 0) {
-		exit(0);
-	    } else if (pid < 0) {
-		syslog(LOG_ERR, "Error forking second fork");
-		exit(1);
-	    }
-	}
-
-	/* Close all my standard I/O. */
-	chdir("/");
-	close(0);
-	close(1);
-	close(2);
-    }
-
-    /* write pid file */
-    make_pidfile(pid_file);
-
-    /* Ignore SIGPIPEs so they don't kill us. */
-    signal(SIGPIPE, SIG_IGN);
-
-    set_sighup_handler(reread_config);
-
-    sel_select_loop(ser2syslog_sel);
-
-    return 0;
+  return 0;
 }
 
