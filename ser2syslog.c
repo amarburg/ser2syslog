@@ -57,7 +57,9 @@ static int debug = 0;
 
 
 static char *help_string =
-"%s: Valid parameters are:\n"
+"%s: "
+"Usage: %s -[Pndv] <portname>\n"
+"Parameters are:\n"
 "  -P <file> - set location of pid file\n"
 "  -n - Don't detach from the controlling terminal\n"
 "  -d - Don't detach and send debug I/O to standard output\n"
@@ -66,7 +68,7 @@ static char *help_string =
   void
 arg_error(char *name)
 {
-  fprintf(stderr, help_string, name);
+  fprintf(stderr, help_string, name,name);
   exit(1);
 }
 
@@ -105,15 +107,16 @@ main(int argc, char *argv[])
   int syslog_options, fd_options;
 
   char buf[BUF_LEN+2];
-  int buf_ptr = 0;
+  int buf_offset = 0;
 
   char *eol = "\x0D\x0A";
   char *eol_ptr;
+  int eol_offset;
 
   int bytes_read;
-  int prev_buf_ptr;
+  int prev_buf_offset;
 
-  while( c == getopt( argc, argv, "P:ndv" ) ) {
+  while( (c = getopt( argc, argv, "P:ndv" )) != -1 ) {
     switch( c ) {
       case 'n':
         detach = 0;
@@ -132,10 +135,28 @@ main(int argc, char *argv[])
         printf("%s version %s\n", argv[0], VERSION);
         exit(0);
 
+      case ':':
+        fprintf(stderr, "Missing parameter for: '%c'\n", optopt);
+        arg_error(argv[0]);
+      case '?':
+        fprintf(stderr, "Invalid option: '%c'\n", optopt);
+        arg_error(argv[0]);
+
       default:
         fprintf(stderr, "Invalid option: '%c'\n", c);
         arg_error(argv[0]);
     }
+  }
+
+  if( optind >= argc ) {
+    fprintf(stderr, "Need to specify port on command line\n");
+    arg_error(argv[0]);
+  }
+
+dev_name = argv[optind];
+
+  if( debug) {
+    fprintf(stderr,"Opening port: %s\n", dev_name );
   }
 
 
@@ -200,28 +221,33 @@ main(int argc, char *argv[])
 
   tcsetattr( devfd, TCSANOW, &termctl );
 
-  while( bytes_read = read( devfd, &(buf[buf_ptr]), BUF_LEN-buf_ptr ) ) {
-    pre_buf_ptr = buf_ptr;
-    buf_ptr += bytes_read;
-    buf[buf_ptr] = '\0';
+  while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset )) ) {
+    prev_buf_offset = buf_offset;
+    buf_offset += bytes_read;
+    buf[buf_offset] = '\0';
 
-    if( buf_ptr => BUF_LEN ) {
-      syslog( severity, "%BUF_LENs", buf );
-      buf_ptr = 0;
+    if( buf_offset >= BUF_LEN ) {
+      syslog( severity, "%*s", BUF_LEN, buf );
+      buf_offset = 0;
     }
 
-    if( pre_buf_ptr > strlen( eol ) ) { pre_buf_ptr -= strlen(eol) };
-    else { pre_buf_ptr = 0; }
+    if( prev_buf_offset > strlen( eol ) ) { 
+      prev_buf_offset -= strlen(eol); 
+    } else { 
+      prev_buf_offset = 0; 
+    }
 
-    if( eol_ptr = strstr( &(buf[pre_buf_ptr]), eol ) ) {
+    if( (eol_ptr = strstr( &(buf[prev_buf_offset]), eol )) ) {
       eol_ptr = '\0';
       eol_ptr += strlen(eol);
 
       syslog( severity, "%s", buf );
 
-      if( eol_ptr < buf_ptr ) {
-        memcpy( buf, eol_tr, (buf_ptr - eol_ptr) );
-        buf_ptr = 0;
+eol_offset = eol_ptr-buf;
+
+      if( eol_offset < buf_offset ) {
+        memcpy( buf, eol_ptr, (buf_offset - eol_offset ));
+        buf_offset = 0;
       }
 
     }

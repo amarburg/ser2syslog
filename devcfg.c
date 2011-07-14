@@ -32,7 +32,7 @@
 #include <stdio.h>
 
 #include "devcfg.h"
-v
+
 /* Initialize a serial port control structure for the first time.
    This should only be called when the port is created.  It sets the
    port to the default 9600N81. */
