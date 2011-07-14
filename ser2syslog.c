@@ -39,6 +39,9 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <errno.h>
+static char *test_buf="test_abcdefghijklmnopqrstuvwxyz";
+
 #include "devcfg.h"
 
 #define DEFAULT_FACILITY LOG_LOCAL0
@@ -60,10 +63,10 @@ static char *help_string =
 "%s: "
 "Usage: %s -[Pndv] <portname>\n"
 "Parameters are:\n"
-"  -P <file> - set location of pid file\n"
-"  -n - Don't detach from the controlling terminal\n"
-"  -d - Don't detach and send debug I/O to standard output\n"
-"  -v - print the program's version and exit\n";
+"  -P <file>   Set location of pid file\n"
+"  -n          Don't detach from the controlling terminal\n"
+"  -d          Don't detach and send debug I/O to standard output\n"
+"  -v          Print the program's version and exit\n";
 
   void
 arg_error(char *name)
@@ -208,6 +211,7 @@ dev_name = argv[optind];
   cfsetispeed( &termctl, baud_rate );
 
   if( debug ) {
+    fprintf( stdout, "Opening terminal: " );
     show_ser_params( stdout, &termctl );
   }
 
@@ -216,10 +220,13 @@ dev_name = argv[optind];
 
   if( devfd == -1 ) {
     close( devfd );
-    syslog( LOG_ERR, "Could not open device %s", dev_name );
+    syslog( LOG_ERR, "Could not open device %s %s", dev_name, strerror(errno) );
+    exit(-1);
   }
 
   tcsetattr( devfd, TCSANOW, &termctl );
+
+write(devfd, test_buf, strlen(test_buf));
 
   while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset )) ) {
     prev_buf_offset = buf_offset;
