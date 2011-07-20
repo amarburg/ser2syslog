@@ -35,9 +35,11 @@
 #include <string.h>
 #include <syslog.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <errno.h>
 static char *test_buf="test_abcdefghijklmnopqrstuvwxyz";
@@ -47,7 +49,7 @@ static char *test_buf="test_abcdefghijklmnopqrstuvwxyz";
 #define DEFAULT_FACILITY LOG_LOCAL0
 #define DEFAULT_SEVERITY LOG_ERR
 #define DEFAULT_BAUD     B9600
-#define BUF_LEN          256
+#define BUF_LEN          10
 
 static char *dev_name = NULL;
 static speed_t baud_rate = DEFAULT_BAUD;
@@ -55,9 +57,9 @@ static int facility = DEFAULT_FACILITY;
 static int severity = DEFAULT_SEVERITY;
 
 static char *pid_file = NULL;
-static int detach = 1;
-static int debug = 0;
-
+static bool detach = true;
+static bool debug = false;
+static bool do_fifo = false;
 
 static char *help_string =
 "%s: "
@@ -66,17 +68,16 @@ static char *help_string =
 "  -P <file>   Set location of pid file\n"
 "  -n          Don't detach from the controlling terminal\n"
 "  -d          Don't detach and send debug I/O to standard output\n"
+"  -f          Create a FIFO named <portname>\n"
 "  -v          Print the program's version and exit\n";
 
-  void
-arg_error(char *name)
+void arg_error(char *name)
 {
   fprintf(stderr, help_string, name,name);
   exit(1);
 }
 
-  void
-make_pidfile(char *pidfile)
+void make_pidfile(char *pidfile)
 {
   FILE *fpidfile;
   if (!pidfile)
@@ -92,8 +93,7 @@ make_pidfile(char *pidfile)
   fclose(fpidfile);
 }
 
-void
-show_ser_params( FILE *stream, struct termios *termctl   )
+void show_ser_params( FILE *stream, struct termios *termctl   )
 {
   char buf[80];
 
@@ -101,37 +101,64 @@ show_ser_params( FILE *stream, struct termios *termctl   )
   fprintf( stream, "%s\n", buf );
 }
 
+void at_exit( void )
+{
+  if( do_fifo == true ) {
+    unlink( dev_name );
+  }
+}
 
-  int
-main(int argc, char *argv[])
+void at_signal( int signum )
+{
+  exit(signum);
+}
+
+void show_eol_chars( const char *eol )
+{
+  int i;
+  fprintf(stderr,"EOL sequence: ");
+
+  for( i = 0; eol[i] != '\0'; i++ ) {
+    fprintf( stderr, "\\x%02X ", eol[i] );
+  }
+  fprintf( stderr, "\n" );
+}
+
+
+int main(int argc, char *argv[])
 {
   char c;
-  int devfd;
+  int devfd=-1;
   int syslog_options, fd_options;
 
-  char buf[BUF_LEN+2];
+  char buf[BUF_LEN+1];
   int buf_offset = 0;
 
-  char *eol = "\x0D\x0A";
+  char *eol = "\x0A"; //"\x0D\x0A";
   char *eol_ptr;
   int eol_offset;
 
   int bytes_read;
   int prev_buf_offset;
 
-  while( (c = getopt( argc, argv, "P:ndv" )) != -1 ) {
+
+  while( (c = getopt( argc, argv, "P:ndfv" )) != -1 ) {
     switch( c ) {
       case 'n':
-        detach = 0;
+        detach = false;
         break;
 
       case 'd':
-        detach = 0;
-        debug = 1;
+        detach = false;
+        debug = true;
         break;
 
       case 'P':
         pid_file = optarg;
+        break;
+
+      case 'f':
+        do_fifo = true;
         break;
 
       case 'v':
@@ -156,14 +183,16 @@ main(int argc, char *argv[])
     arg_error(argv[0]);
   }
 
-dev_name = argv[optind];
+  dev_name = argv[optind];
 
   if( debug) {
     fprintf(stderr,"Opening port: %s\n", dev_name );
+    show_eol_chars( eol );
   }
 
-
-  //setup_sighup();
+  atexit( at_exit );
+  signal( SIGHUP, at_signal );
+  signal( SIGINT, at_signal );
 
   if (detach) {
     int pid;
@@ -203,63 +232,102 @@ dev_name = argv[optind];
   if( debug && !detach ) syslog_options |= LOG_PERROR;
   openlog( dev_name, syslog_options, facility );
 
-  // Open the serial port
-  struct termios termctl;
-  devinit( &termctl );
+  if( do_fifo == false ) {
+   // Open the serial port
+    struct termios termctl;
+    devinit( &termctl );
 
-  cfsetospeed( &termctl, baud_rate );
-  cfsetispeed( &termctl, baud_rate );
+    cfsetospeed( &termctl, baud_rate );
+    cfsetispeed( &termctl, baud_rate );
 
-  if( debug ) {
-    fprintf( stdout, "Opening terminal: " );
-    show_ser_params( stdout, &termctl );
-  }
-
-  fd_options = O_NONBLOCK | O_NOCTTY | O_RDONLY;
-  devfd = open(  dev_name, fd_options );
-
-  if( devfd == -1 ) {
-    close( devfd );
-    syslog( LOG_ERR, "Could not open device %s %s", dev_name, strerror(errno) );
-    exit(-1);
-  }
-
-  tcsetattr( devfd, TCSANOW, &termctl );
-
-write(devfd, test_buf, strlen(test_buf));
-
-  while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset )) ) {
-    prev_buf_offset = buf_offset;
-    buf_offset += bytes_read;
-    buf[buf_offset] = '\0';
-
-    if( buf_offset >= BUF_LEN ) {
-      syslog( severity, "%*s", BUF_LEN, buf );
-      buf_offset = 0;
+    if( debug ) {
+      fprintf( stdout, "Opening terminal: " );
+      show_ser_params( stdout, &termctl );
     }
 
-    if( prev_buf_offset > strlen( eol ) ) { 
-      prev_buf_offset -= strlen(eol); 
-    } else { 
-      prev_buf_offset = 0; 
+    fd_options = O_NONBLOCK | O_NOCTTY | O_RDONLY;
+    devfd = open(  dev_name, fd_options );
+
+    if( devfd == -1 ) {
+      syslog( LOG_ERR, "Could not open device %s %s", dev_name, strerror(errno) );
+      close( devfd );
+      exit(-1);
     }
 
-    if( (eol_ptr = strstr( &(buf[prev_buf_offset]), eol )) ) {
-      eol_ptr = '\0';
-      eol_ptr += strlen(eol);
+    tcsetattr( devfd, TCSANOW, &termctl );
 
-      syslog( severity, "%s", buf );
+  }
 
-eol_offset = eol_ptr-buf;
+  while( true ) {
 
-      if( eol_offset < buf_offset ) {
-        memcpy( buf, eol_ptr, (buf_offset - eol_offset ));
-        buf_offset = 0;
+    // If working with a FIFO, it needs to be recycled after each client connect/disconnects
+    if( do_fifo == true ) {
+      if( devfd >= 0 ) close(devfd);
+      // Open as a FIFO
+      if( mkfifo( dev_name, S_IRUSR | S_IWUSR ) < 0 ) {
+        if( errno != EEXIST ) {
+          syslog( LOG_ERR, "Error opening FIFO \"%s\": %s", dev_name, strerror(errno) );
+          exit(-1);
+        }
       }
 
+      // Open the FIFO blocking, it won't truly open until there's a writer..
+      devfd = open( dev_name, O_RDONLY );
+
+      if( devfd == -1 ) {
+        syslog( LOG_ERR, "Could not open FIFO \"%s\": %s", dev_name, strerror(errno) );
+        close( devfd );
+        exit(-1);
+      }
+    }
+
+    while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset ))  > 0) {
+      prev_buf_offset = buf_offset;
+      buf_offset += bytes_read;
+
+      // Check for overflow
+      if( buf_offset >= BUF_LEN ) {
+        buf[BUF_LEN] = '\0';
+        syslog( severity, "%*s", BUF_LEN, buf );
+        buf_offset = 0;
+        continue;
+      }
+
+      buf[buf_offset] = '\0';
+
+      // Back up a bit, in case the EOL sequence spans reads
+      if( prev_buf_offset > strlen( eol ) ) { 
+        prev_buf_offset -= strlen(eol); 
+      } else { 
+        prev_buf_offset = 0; 
+      }
+
+      if( (eol_ptr = strstr( &(buf[prev_buf_offset]), eol )) != NULL ) {
+        *eol_ptr = '\0';
+        eol_ptr += strlen(eol);
+
+        // Special exception for \0x0D sequence
+        if( eol[0] == '\x0A' && 
+            strlen(buf)>0 &&  
+            buf[ strlen(buf)-1 ] == '\x0D' ) {
+          buf[strlen(buf)-1] = '\0';
+        }
+
+        syslog( severity, "%s", buf );
+
+        eol_offset = eol_ptr-buf;
+
+        if( eol_offset < buf_offset ) {
+          memcpy( buf, eol_ptr, (buf_offset - eol_offset ));
+        }
+
+        buf_offset = 0;
+      }
     }
   }
 
-  return 0;
+  syslog( LOG_ERR, "Exiting as we read %d: %s", bytes_read, strerror(errno) );
+
+exit(0);
 }
 
