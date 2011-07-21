@@ -48,7 +48,7 @@
 #define DEFAULT_FACILITY LOG_LOCAL0
 #define DEFAULT_SEVERITY LOG_ERR
 #define DEFAULT_BAUD     B9600
-#define BUF_LEN          2048
+#define BUF_LEN          200
 #define IDENT_BUF_LEN    64
 
 static char *dev_name = NULL;
@@ -131,18 +131,18 @@ int main(int argc, char *argv[])
   char c;
   int devfd=-1;
   int syslog_options, fd_options;
+  char ident_buf[IDENT_BUF_LEN];
 
   char buf[BUF_LEN+1];
-  char ident_buf[IDENT_BUF_LEN];
-  int buf_offset = 0;
+  char *buf_write_ptr = buf;
+
 
   char *eol = "\x0A"; //"\x0D\x0A";
   char *eol_ptr;
+  char *msg_ptr;
   int eol_offset;
 
   int bytes_read;
-  int prev_buf_offset;
-
 
   while( (c = getopt( argc, argv, "P:nb:dfv" )) != -1 ) {
     switch( c ) {
@@ -294,22 +294,24 @@ int main(int argc, char *argv[])
       }
     }
 
-    while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset ))  > 0) {
+    while( (bytes_read = read( devfd, buf_write_ptr, BUF_LEN-(buf_write_ptr-buf) ))  > 0) {
 
-      prev_buf_offset = buf_offset;
-      buf_offset += bytes_read;
+      buf_write_ptr += bytes_read;
 
       // Check for overflow
-      if( buf_offset >= BUF_LEN ) {
+      if( (buf_write_ptr-buf) > BUF_LEN ) {
         buf[BUF_LEN] = '\0';
-        syslog( severity, "%*s", BUF_LEN, buf );
-        buf_offset = 0;
+        syslog( severity, "overflow: %*s", BUF_LEN, buf );
+        buf_write_ptr = buf;
         continue;
       }
 
-      buf[buf_offset] = '\0';
+      *buf_write_ptr = '\0';
 
-      while( (eol_ptr = strstr( buf, eol )) != NULL ) {
+      //fprintf(stderr,"buf [%d]: %s\n", buf_write_ptr-buf, buf );
+
+      msg_ptr = eol_ptr = buf;
+      while( (eol_ptr = strstr( eol_ptr, eol )) != NULL ) {
         *eol_ptr = '\0';
         eol_ptr += strlen(eol);
 
@@ -320,16 +322,21 @@ int main(int argc, char *argv[])
           buf[strlen(buf)-1] = '\0';
         }
 
-        syslog( severity, "%s", buf );
+        syslog( severity, "%s", msg_ptr  );
 
-        eol_offset = eol_ptr-buf;
-
-        if( eol_offset < buf_offset ) {
-          memcpy( buf, eol_ptr, (buf_offset - eol_offset ));
-        }
-
-        buf_offset = 0;
+        msg_ptr = eol_ptr;
       }
+
+      if( eol_ptr < buf_write_ptr ) {
+        int bytes_to_save = (buf_write_ptr - msg_ptr );
+        memcpy( buf, msg_ptr, bytes_to_save );
+        buf_write_ptr -= (msg_ptr - buf);
+      } else {
+        buf_write_ptr = buf;
+      }
+      
+
+
     }
   }
 
