@@ -1,6 +1,7 @@
 /*
  *  ser2syslog - A program for forwarding serial data to syslog. 
  *  (C) 2011 Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz>
+ *
  *  Based very heavily on:
  *
  *  ser2net - A program for allowing telnet connection to serial ports
@@ -28,6 +29,9 @@
 
 /* Called to initially configure a terminal. */
 void devinit(struct termios *termctl);
+
+/* Converts string to baud rate */
+int string_to_baud( const char *b );
 
 /* Called to change the configuration of a device based upon the
    string parameters. */

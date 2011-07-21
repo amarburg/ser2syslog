@@ -73,6 +73,21 @@ baud_string(int speed)
     return str;
 }
 
+int string_to_baud( const char *b )
+{
+  if( strcmp( b, "300" ) == 0 ) return 300;
+  else if( strcmp( b, "1200" ) == 0 ) return 1200;
+  else if( strcmp( b, "2400" ) == 0 ) return 2400;
+  else if( strcmp( b, "4800" ) == 0 ) return 4800;
+  else if( strcmp( b, "9600" ) == 0 ) return 9600;
+  else if( strcmp( b, "19200" ) == 0 ) return 19200;
+  else if( strcmp( b, "38400" ) == 0 ) return 38400;
+  else if( strcmp( b, "57600" ) == 0 ) return 57600;
+  else if( strcmp( b, "115200" ) == 0 ) return 115200;
+
+  return -1;
+}
+
 void
 serparm_to_str(char *str, int strlen, struct termios *termctl)
 {

@@ -42,14 +42,14 @@
 #include <stdbool.h>
 
 #include <errno.h>
-static char *test_buf="test_abcdefghijklmnopqrstuvwxyz";
 
 #include "devcfg.h"
 
 #define DEFAULT_FACILITY LOG_LOCAL0
 #define DEFAULT_SEVERITY LOG_ERR
 #define DEFAULT_BAUD     B9600
-#define BUF_LEN          10
+#define BUF_LEN          2048
+#define IDENT_BUF_LEN    64
 
 static char *dev_name = NULL;
 static speed_t baud_rate = DEFAULT_BAUD;
@@ -66,6 +66,7 @@ static char *help_string =
 "Usage: %s -[Pndv] <portname>\n"
 "Parameters are:\n"
 "  -P <file>   Set location of pid file\n"
+"  -b <baud>   Set baud rate\n"
 "  -n          Don't detach from the controlling terminal\n"
 "  -d          Don't detach and send debug I/O to standard output\n"
 "  -f          Create a FIFO named <portname>\n"
@@ -132,6 +133,7 @@ int main(int argc, char *argv[])
   int syslog_options, fd_options;
 
   char buf[BUF_LEN+1];
+  char ident_buf[IDENT_BUF_LEN];
   int buf_offset = 0;
 
   char *eol = "\x0A"; //"\x0D\x0A";
@@ -142,7 +144,7 @@ int main(int argc, char *argv[])
   int prev_buf_offset;
 
 
-  while( (c = getopt( argc, argv, "P:ndfv" )) != -1 ) {
+  while( (c = getopt( argc, argv, "P:nb:dfv" )) != -1 ) {
     switch( c ) {
       case 'n':
         detach = false;
@@ -151,6 +153,14 @@ int main(int argc, char *argv[])
       case 'd':
         detach = false;
         debug = true;
+        break;
+
+      case 'b':
+        baud_rate = string_to_baud( optarg );
+        if( baud_rate < 0 ) {
+          fprintf(stderr, "Can't parse baud rate \"%s\"\n", optarg );
+          arg_error(argv[0]);
+        }
         break;
 
       case 'P':
@@ -186,7 +196,7 @@ int main(int argc, char *argv[])
   dev_name = argv[optind];
 
   if( debug) {
-    fprintf(stderr,"Opening port: %s\n", dev_name );
+    fprintf(stderr,"Opening device %s", dev_name );
     show_eol_chars( eol );
   }
 
@@ -230,22 +240,24 @@ int main(int argc, char *argv[])
 
   syslog_options = LOG_NDELAY;
   if( debug && !detach ) syslog_options |= LOG_PERROR;
-  openlog( dev_name, syslog_options, facility );
+  // Terminate with two colons to make cutting easier 
+  snprintf( ident_buf, IDENT_BUF_LEN, "ser2syslog [%s]::", dev_name );
+  openlog( ident_buf, syslog_options, facility );
 
   if( do_fifo == false ) {
-   // Open the serial port
+    // Open the serial port
     struct termios termctl;
     devinit( &termctl );
 
     cfsetospeed( &termctl, baud_rate );
     cfsetispeed( &termctl, baud_rate );
 
-    if( debug ) {
-      fprintf( stdout, "Opening terminal: " );
-      show_ser_params( stdout, &termctl );
+    if( debug == true ) {
+      fprintf(stderr, "Serial params: ");
+      show_ser_params( stderr, &termctl );
     }
 
-    fd_options = O_NONBLOCK | O_NOCTTY | O_RDONLY;
+    fd_options = O_NOCTTY | O_RDONLY;
     devfd = open(  dev_name, fd_options );
 
     if( devfd == -1 ) {
@@ -257,6 +269,7 @@ int main(int argc, char *argv[])
     tcsetattr( devfd, TCSANOW, &termctl );
 
   }
+
 
   while( true ) {
 
@@ -282,6 +295,7 @@ int main(int argc, char *argv[])
     }
 
     while( (bytes_read = read( devfd, &(buf[buf_offset]), BUF_LEN-buf_offset ))  > 0) {
+
       prev_buf_offset = buf_offset;
       buf_offset += bytes_read;
 
@@ -295,14 +309,7 @@ int main(int argc, char *argv[])
 
       buf[buf_offset] = '\0';
 
-      // Back up a bit, in case the EOL sequence spans reads
-      if( prev_buf_offset > strlen( eol ) ) { 
-        prev_buf_offset -= strlen(eol); 
-      } else { 
-        prev_buf_offset = 0; 
-      }
-
-      if( (eol_ptr = strstr( &(buf[prev_buf_offset]), eol )) != NULL ) {
+      while( (eol_ptr = strstr( buf, eol )) != NULL ) {
         *eol_ptr = '\0';
         eol_ptr += strlen(eol);
 
@@ -328,6 +335,6 @@ int main(int argc, char *argv[])
 
   syslog( LOG_ERR, "Exiting as we read %d: %s", bytes_read, strerror(errno) );
 
-exit(0);
+  exit(0);
 }
 
