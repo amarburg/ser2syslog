@@ -48,7 +48,7 @@
 #define DEFAULT_FACILITY LOG_LOCAL0
 #define DEFAULT_SEVERITY LOG_ERR
 #define DEFAULT_BAUD     B9600
-#define BUF_LEN          200
+#define BUF_LEN          2048
 #define IDENT_BUF_LEN    64
 
 static char *dev_name = NULL;
