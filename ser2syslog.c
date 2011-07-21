@@ -1,9 +1,10 @@
 /*
  *  ser2syslog - A program for forwarding serial data to syslog. 
  *  (C) 2011 Aaron Marburg <aaron.marburg@pg.canterbury.ac.nz>
+ *
  *  Based very heavily on:
  *
- *  ser2syslog - A program for allowing telnet connection to serial ports
+ *  ser2net - A program for allowing telnet connection to serial ports
  *  Copyright (C) 2001  Corey Minyard <minyard@acm.org>
  *
  *  This program is free software; you can redistribute it and/or modify
