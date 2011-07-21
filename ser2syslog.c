@@ -317,9 +317,9 @@ int main(int argc, char *argv[])
 
         // Special exception for \0x0D sequence
         if( eol[0] == '\x0A' && 
-            strlen(buf)>0 &&  
-            buf[ strlen(buf)-1 ] == '\x0D' ) {
-          buf[strlen(buf)-1] = '\0';
+            strlen(msg_ptr)>0 &&  
+            msg_ptr[ strlen(msg_ptr)-1 ] == '\x0D' ) {
+          msg_ptr[strlen(msg_ptr)-1] = '\0';
         }
 
         syslog( severity, "%s", msg_ptr  );
