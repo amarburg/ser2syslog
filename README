@@ -3,6 +3,13 @@ port and forwarding it to syslog.   It was created by drastically
 stripping functionality out of ser2net.  The first versions
 will not be built with configuratbility in mind.
 
+Of course, if you want to be picky, you could probably achieve the same
+effect with:
+
+cat /dev/ttyS0 | logger -p local7.info -t "some message"
+
+
+
 Where files are used unedited, the original ser2net copyright and
 headers are retained.  When files are changed, a ser2syslog copyright
 has been added.
